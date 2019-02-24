@@ -1,0 +1,36 @@
+from pyspark.sql import SparkSession, SQLContext
+from pyspark.ml.clustering import KMeans
+from pyspark.ml.feature import VectorAssembler, StandardScaler
+from pyspark.sql.functions import monotonically_increasing_id
+import pandas as pd
+
+
+spark = SparkSession.builder.appName('test machine learning').getOrCreate()
+sqlContext = SQLContext(spark)
+
+df = spark.read.load("loanfeatures.csv", format="csv", sep=",", inferSchema="true", header="true")
+df_no_nulls = df.na.drop()
+df_id = df_no_nulls.withColumn("id", monotonically_increasing_id())
+
+assembler = VectorAssembler(inputCols=["emp_length", "home_ownership", "annual_inc"],outputCol="features")
+
+output = assembler.transform(df_id)
+output = output.select("id","features")
+scaler = StandardScaler(inputCol="features", outputCol="scaledFeatures", withStd=True, withMean=True)
+
+scalerModel = scaler.fit(output)
+scaledData = scalerModel.transform(output)
+dataframe = scaledData.select("id","scaledFeatures")
+
+k = 7
+kmeans = KMeans().setK(k).setSeed(1).setFeaturesCol("scaledFeatures")
+model = kmeans.fit(dataframe)
+centers = model.clusterCenters()
+
+transformed = model.transform(dataframe).select('id', 'prediction')
+rows = transformed.collect()
+new_df = sqlContext.createDataFrame(rows)
+df_pred = new_df.join(dataframe, 'id')
+pandaDf = df_pred.toPandas()
+pandaDf.to_csv('results.csv', sep=',', encoding='utf-8')
+spark.stop()
